@@ -1,0 +1,143 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Prisma Client generator — generates the type-safe query builder
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+// PostgreSQL datasource — connection string is read from the environment variable
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------
+// User
+// Stores one record per authenticated user.
+// Created on first Google OAuth login; updated on every subsequent login.
+// -----------------------------------------------------------------------
+model User {
+  id         String   @id @default(cuid())   // Internal primary key (CUID)
+  email      String   @unique                 // Google email — must be unique
+  name       String                           // Display name from Google profile
+  avatar     String?                          // Profile picture URL (nullable)
+  provider   String   @default("google")      // OAuth provider name
+  providerId String                           // Provider-specific user ID (Google UID)
+
+  createdAt  DateTime @default(now())         // Timestamp of first login
+  updatedAt  DateTime @updatedAt              // Timestamp of most recent login
+  subscriptions Subscription[]
+  whatsappNumber String?
+  whatsappConnectedAt DateTime?
+  reminderLeadDays Int @default(3)
+  timeZone String @default("Asia/Karachi")
+  reminderDeliveries ReminderDelivery[]
+  gmailConnections GmailConnection[]
+  reviewCandidates ReviewCandidate[]
+
+  @@index([email])    // Fast lookup by email
+  @@index([providerId]) // Fast lookup by provider ID
+}
+
+model GmailConnection {
+  id              String   @id @default(cuid())
+  ownerEmail      String
+  owner           User     @relation(fields: [ownerEmail], references: [email], onDelete: Cascade)
+  gmailEmail      String   @unique
+  sealedTokens    String
+  historyId       String?
+  watchExpiration DateTime?
+  watchStatus     String   @default("pending")
+  lastWebhookAt   DateTime?
+  lastSyncAt      DateTime?
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([ownerEmail])
+}
+
+model ReviewCandidate {
+  id                   String   @id @default(cuid())
+  userEmail            String
+  user                 User     @relation(fields: [userEmail], references: [email], onDelete: Cascade)
+  emailId              String
+  subject              String
+  sender               String
+  receivedAt           DateTime
+  tag                   String
+  serviceName           String
+  amount                String?
+  billingFrequency      String?
+  renewalOrEndDate      DateTime?
+  summary               String
+  evidence              Json?
+  merchantInference     String?
+  renewalEstimate       Json?
+  status                String   @default("pending")
+  source                String   @default("gmail_webhook")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([userEmail, emailId])
+  @@index([userEmail, status, receivedAt])
+}
+
+model GmailWebhookEvent {
+  id           String   @id
+  emailAddress String
+  historyId    String
+  status       String   @default("pending")
+  attempts     Int      @default(0)
+  lastError    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model Subscription {
+  id                   String   @id @default(cuid())
+  userEmail            String
+  user                 User     @relation(fields: [userEmail], references: [email], onDelete: Cascade)
+  serviceName          String
+  billingFrequency     String?
+  renewalOrEndDate     DateTime?
+  amount               String?
+  tag                  String   @default("subscription")
+  source               String
+  sourceId             String
+  reminderEnabled      Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  reminderDeliveries   ReminderDelivery[]
+
+  @@unique([userEmail, source, sourceId])
+  @@index([userEmail, renewalOrEndDate])
+}
+
+
+model ReminderDelivery {
+  id                String        @id @default(cuid())
+  userEmail         String
+  user              User          @relation(fields: [userEmail], references: [email], onDelete: Cascade)
+  subscriptionId    String?
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  kind              String
+  deliveryKey       String        @unique
+  message           String
+  status            String        @default("pending")
+  scheduledFor      DateTime
+  attempts          Int           @default(0)
+  providerMessageId String?
+  lastError         String?
+  sentAt            DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([status, scheduledFor])
+  @@index([userEmail, createdAt])
+  @@index([subscriptionId])
+}
