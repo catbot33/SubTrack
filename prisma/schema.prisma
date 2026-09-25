@@ -23,6 +23,8 @@ model User {
   email      String   @unique                 // Google email — must be unique
   name       String                           // Display name from Google profile
   avatar     String?                          // Profile picture URL (nullable)
+  profileName String?
+  profileAvatar String?
   provider   String   @default("google")      // OAuth provider name
   providerId String                           // Provider-specific user ID (Google UID)
 
@@ -32,6 +34,7 @@ model User {
   whatsappNumber String?
   whatsappConnectedAt DateTime?
   reminderLeadDays Int @default(3)
+  monitoringPaused Boolean @default(false)
   timeZone String @default("Asia/Karachi")
   reminderDeliveries ReminderDelivery[]
   gmailConnections GmailConnection[]
@@ -109,7 +112,7 @@ model Subscription {
   tag                  String   @default("subscription")
   source               String
   sourceId             String
-  reminderEnabled      Boolean  @default(false)
+  reminderEnabled      Boolean  @default(true)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   reminderDeliveries   ReminderDelivery[]

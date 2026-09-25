@@ -116,6 +116,7 @@ export function ConnectionsPanel() {
   const [gmailConnections, setGmailConnections] = useState<GmailConnection[]>([]);
   const [number, setNumber] = useState('');
   const [editing, setEditing] = useState(false);
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -147,6 +148,18 @@ export function ConnectionsPanel() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to connect WhatsApp.'); }
     finally { setSaving(false); }
   };
+  const removeNumber = async () => {
+    if (saving) return;
+    setSaving(true); setError('');
+    try {
+      const response = await fetch('/api/connections/whatsapp', { method: 'DELETE' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to remove this WhatsApp number.');
+      setNumber(''); setEditing(false); setConfirmingRemoval(false);
+      await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to remove this WhatsApp number.'); }
+    finally { setSaving(false); }
+  };
   const status = settings?.latestTest;
 
   return <section className={styles.connectionsPage} aria-labelledby="connections-title">
@@ -160,7 +173,7 @@ export function ConnectionsPanel() {
         <p>These inboxes have been scanned and are monitored for future subscription emails.</p>
         <div className={styles.gmailAccounts}>{gmailConnections.map((connection) => <div className={styles.gmailAccount} key={connection.email}>
           <strong>{connection.email}</strong>
-          <span>{connection.status === 'active' || connection.status === 'polling' ? 'Scanning complete · Monitoring new emails' : 'Connection needs attention'}</span>
+          <span>{connection.status === 'active' || connection.status === 'polling' ? 'Scanning complete · Monitoring new emails' : connection.status === 'paused' ? 'Live monitoring is on hold' : 'Connection needs attention'}</span>
         </div>)}</div>
         <a className={styles.connectButton} href="/auth/google/connect">Connect another Gmail</a>
       </> : <>
@@ -175,10 +188,14 @@ export function ConnectionsPanel() {
         <p className={styles.connectedNumber}>{settings.whatsappNumber}</p>
         <p>Used only for renewal reminders you enable.</p>
         {status ? <p className={styles.connectionStatus} role="status">{status.status === 'sent' ? 'Confirmation accepted by WhatsApp.' : status.status === 'failed' ? `WhatsApp rejected the confirmation${status.lastError ? `: ${status.lastError}` : '.'}` : status.status === 'pending' || status.status === 'sending' ? 'Confirmation scheduled—sending shortly.' : ''}</p> : null}
-        <div className={styles.connectionActions}>
-          <button className={styles.connectButton} type="button" disabled={saving} onClick={() => void connect(settings.whatsappNumber || '')}>{saving ? 'Scheduling…' : 'Send confirmation again'}</button>
+        {confirmingRemoval ? <div className={styles.removeConnectionPrompt} role="group" aria-label="Confirm removing WhatsApp number">
+          <p>Remove this number and cancel its pending WhatsApp reminders?</p>
+          <div className={styles.connectionActions}><button className={styles.secondaryButton} type="button" disabled={saving} onClick={() => setConfirmingRemoval(false)}>Keep number</button><button className={styles.disconnectButton} type="button" disabled={saving} onClick={() => void removeNumber()}>{saving ? 'Removing…' : 'Remove number'}</button></div>
+        </div> : <div className={styles.connectionActions}>
+          <button className={styles.connectButton} type="button" disabled={saving} onClick={() => void connect(settings.whatsappNumber || '')}>{saving ? 'Scheduling…' : 'Resend confirmation'}</button>
           <button className={styles.secondaryButton} type="button" disabled={saving} onClick={() => { setNumber(settings.whatsappNumber || ''); setEditing(true); }}>Manage number</button>
-        </div>
+          <button className={styles.disconnectButton} type="button" disabled={saving} onClick={() => setConfirmingRemoval(true)}>Remove number</button>
+        </div>}
       </> : <>
         <p>Enter a number with its country code. A WhatsApp template confirmation will be sent 10 seconds after you confirm.</p>
         <label className={styles.phoneField}><span>WhatsApp number</span><input inputMode="tel" autoComplete="tel" placeholder="+92 300 1234567" value={number} onChange={(event) => setNumber(event.target.value)} /></label>

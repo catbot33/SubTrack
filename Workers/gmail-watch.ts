@@ -104,9 +104,13 @@ function fallbackIntervalMs(): number {
 async function processEvent(eventId: string): Promise<void> {
   const event = await prisma.gmailWebhookEvent.findUnique({ where: { id: eventId } });
   if (!event || event.status === 'completed') return;
-  const connection = await prisma.gmailConnection.findUnique({ where: { gmailEmail: event.emailAddress } });
+  const connection = await prisma.gmailConnection.findUnique({ where: { gmailEmail: event.emailAddress }, include: { owner: { select: { monitoringPaused: true } } } });
   if (!connection) {
     await prisma.gmailWebhookEvent.update({ where: { id: eventId }, data: { status: 'ignored', lastError: 'No Gmail connection for this mailbox.' } });
+    return;
+  }
+  if (connection.owner.monitoringPaused) {
+    await prisma.gmailWebhookEvent.update({ where: { id: eventId }, data: { status: 'paused', lastError: 'Live monitoring is paused by the user.' } });
     return;
   }
   const tokens = openGmailTokens(connection.sealedTokens);
@@ -234,9 +238,10 @@ export async function registerWatch(gmailEmail: string): Promise<void> {
 async function renewExpiringWatches(): Promise<void> {
   const renewBefore = new Date(Date.now() + 24 * 60 * 60 * 1000);
   const connections = await prisma.gmailConnection.findMany({
-    where: process.env.GMAIL_PUBSUB_TOPIC
-      ? { OR: [{ watchExpiration: null }, { watchExpiration: { lt: renewBefore } }] }
-      : {},
+    where: {
+      owner: { monitoringPaused: false },
+      ...(process.env.GMAIL_PUBSUB_TOPIC ? { OR: [{ watchExpiration: null }, { watchExpiration: { lt: renewBefore } }] } : {}),
+    },
   });
   for (const connection of connections) {
     try { await registerWatch(connection.gmailEmail); }
@@ -247,7 +252,7 @@ async function renewExpiringWatches(): Promise<void> {
 async function runFallbackSync(): Promise<void> {
   const staleBefore = new Date(Date.now() - Math.max(30_000, Math.floor(fallbackIntervalMs() * 0.8)));
   const connections = await prisma.gmailConnection.findMany({
-    where: { historyId: { not: null }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lt: staleBefore } }] },
+    where: { owner: { monitoringPaused: false }, historyId: { not: null }, OR: [{ lastSyncAt: null }, { lastSyncAt: { lt: staleBefore } }] },
     select: { gmailEmail: true, historyId: true },
   });
   for (const connection of connections) {

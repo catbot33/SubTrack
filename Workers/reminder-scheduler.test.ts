@@ -17,6 +17,8 @@ test('monthly projection clamps to the last valid day', () => {
 
 test('past recurring renewals roll to the current or next cycle', () => {
   assert.equal(rollRenewalForward('2026-06-27', 'monthly', '2026-09-05'), '2026-09-27');
+  assert.equal(rollRenewalForward('2026-09-05', 'monthly', '2026-09-05'), '2026-09-05');
+  assert.equal(rollRenewalForward('2026-09-05', 'monthly', '2026-09-06'), '2026-10-05');
 });
 
 test('messages include merchant, date, countdown and optional amount', () => {

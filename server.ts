@@ -21,7 +21,7 @@ import {
 } from './Workers/extractor/extraction-jobs.ts';
 import type { SubscriptionResult } from './Workers/extractor/types.ts';
 import { subscriptionStore, SubscriptionValidationError } from './Workers/subscription-store.ts';
-import { enqueueGmailPush, saveGmailConnection, serializeCandidate, startGmailWatchWorker, webhookTokenIsValid } from './Workers/gmail-watch.ts';
+import { enqueueGmailPush, registerWatch, saveGmailConnection, serializeCandidate, startGmailWatchWorker, webhookTokenIsValid } from './Workers/gmail-watch.ts';
 import {
   passport,
   generateSessionToken,
@@ -291,6 +291,111 @@ app.post('/api/subscriptions', authenticateJWT, async (req: Request, res: Respon
   }
 });
 
+app.patch('/api/subscriptions/:id', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const subscription = await subscriptionStore.update(req.user!, req.params.id, req.body);
+    if (!subscription) { res.status(404).json({ error: 'Subscription not found.' }); return; }
+    await prisma.reminderDelivery.updateMany({
+      where: { subscriptionId: req.params.id, status: 'pending' },
+      data: { status: 'cancelled', lastError: 'Subscription details changed by the user.' },
+    });
+    if (subscription.reminderEnabled) void runReminderCycle();
+    res.json({ subscription });
+  } catch (error) {
+    res.status(error instanceof SubscriptionValidationError ? 400 : 500).json({
+      error: error instanceof SubscriptionValidationError ? error.message : 'Unable to update the subscription. Please retry.',
+    });
+  }
+});
+
+app.delete('/api/subscriptions/:id', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const deleted = await subscriptionStore.remove(req.user!, req.params.id);
+    if (!deleted) { res.status(404).json({ error: 'Subscription not found.' }); return; }
+    res.status(204).end();
+  } catch { res.status(500).json({ error: 'Unable to delete the subscription. Please retry.' }); }
+});
+
+app.get('/api/settings/account', authenticateJWT, async (req: Request, res: Response) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const user = await prisma.user.upsert({
+      where: { email: req.user!.email },
+      update: { name: req.user!.name, avatar: req.user!.avatar },
+      create: { email: req.user!.email, name: req.user!.name, avatar: req.user!.avatar, provider: req.user!.provider, providerId: req.user!.id },
+      include: { _count: { select: { subscriptions: true, gmailConnections: true } } },
+    });
+    const remindersOn = await prisma.subscription.count({ where: { userEmail: user.email, reminderEnabled: true } });
+    res.json({
+      profile: { name: user.profileName || user.name, avatar: user.profileAvatar ?? user.avatar, email: user.email },
+      monitoringPaused: user.monitoringPaused,
+      subscriptions: user._count.subscriptions,
+      remindersOn,
+      gmailConnections: user._count.gmailConnections,
+    });
+  } catch { res.status(500).json({ error: 'Unable to load account settings.' }); }
+});
+
+app.patch('/api/settings/profile', authenticateJWT, async (req: Request, res: Response) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const avatar = typeof req.body?.avatar === 'string' ? req.body.avatar.trim() : '';
+  if (!name || name.length > 80) { res.status(400).json({ error: 'Enter a name up to 80 characters.' }); return; }
+  if (avatar.length > 1_500_000) { res.status(400).json({ error: 'The profile picture is too large.' }); return; }
+  if (avatar) {
+    const uploadedImage = /^data:image\/(?:jpeg|png|webp);base64,[a-zA-Z0-9+/=]+$/.test(avatar);
+    let secureUrl = false;
+    try { secureUrl = new URL(avatar).protocol === 'https:'; } catch { secureUrl = false; }
+    if (!uploadedImage && !secureUrl) { res.status(400).json({ error: 'Choose a valid profile picture.' }); return; }
+  }
+  try {
+    const user = await prisma.user.update({ where: { email: req.user!.email }, data: { profileName: name, profileAvatar: avatar || null } });
+    res.json({ profile: { name: user.profileName || user.name, avatar: user.profileAvatar ?? user.avatar, email: user.email } });
+  } catch { res.status(500).json({ error: 'Unable to update your profile.' }); }
+});
+
+app.patch('/api/settings/reminders', authenticateJWT, async (req: Request, res: Response) => {
+  if (typeof req.body?.enabled !== 'boolean') { res.status(400).json({ error: 'Choose whether reminders are enabled.' }); return; }
+  try {
+    const changed = await prisma.subscription.updateMany({ where: { userEmail: req.user!.email }, data: { reminderEnabled: req.body.enabled } });
+    if (!req.body.enabled) {
+      await prisma.reminderDelivery.updateMany({ where: { userEmail: req.user!.email, kind: 'renewal', status: 'pending' }, data: { status: 'cancelled', lastError: 'All reminders disabled by the user.' } });
+    } else void runReminderCycle();
+    res.json({ enabled: req.body.enabled, count: changed.count });
+  } catch { res.status(500).json({ error: 'Unable to update reminders.' }); }
+});
+
+app.patch('/api/settings/monitoring', authenticateJWT, async (req: Request, res: Response) => {
+  if (typeof req.body?.paused !== 'boolean') { res.status(400).json({ error: 'Choose whether live monitoring is paused.' }); return; }
+  try {
+    const connections = await prisma.gmailConnection.findMany({ where: { ownerEmail: req.user!.email }, select: { gmailEmail: true } });
+    const emails = connections.map((item) => item.gmailEmail);
+    await prisma.$transaction([
+      prisma.user.update({ where: { email: req.user!.email }, data: { monitoringPaused: req.body.paused } }),
+      prisma.gmailConnection.updateMany({ where: { ownerEmail: req.user!.email }, data: { watchStatus: req.body.paused ? 'paused' : 'pending', lastError: null } }),
+    ]);
+    if (!req.body.paused) await prisma.gmailWebhookEvent.updateMany({ where: { emailAddress: { in: emails }, status: 'paused' }, data: { status: 'pending', lastError: null } });
+    if (!req.body.paused) void Promise.allSettled(emails.map((email) => registerWatch(email)));
+    res.json({ paused: req.body.paused });
+  } catch { res.status(500).json({ error: 'Unable to update live monitoring.' }); }
+});
+
+app.delete('/api/settings/subscriptions', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const deleted = await prisma.subscription.deleteMany({ where: { userEmail: req.user!.email } });
+    res.json({ deleted: deleted.count });
+  } catch { res.status(500).json({ error: 'Unable to delete subscriptions.' }); }
+});
+
+app.delete('/api/settings/account', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    await prisma.user.deleteMany({ where: { email: req.user!.email } });
+    res.clearCookie('session_token');
+    res.clearCookie('gmail_connection');
+    res.clearCookie('oauth_intent');
+    res.status(204).end();
+  } catch { res.status(500).json({ error: 'Unable to delete your account.' }); }
+});
+
 app.patch('/api/subscriptions/:id/reminder', authenticateJWT, async (req: Request, res: Response) => {
   if (typeof req.body?.enabled !== 'boolean') { res.status(400).json({ error: 'Choose whether the reminder is enabled.' }); return; }
   try {
@@ -380,6 +485,24 @@ app.post('/api/connections/whatsapp', authenticateJWT, async (req: Request, res:
     deliveryWake.unref?.();
     res.status(202).json({ whatsappNumber: `+${number}`, status: 'pending', scheduledFor: scheduledFor.toISOString() });
   } catch { res.status(500).json({ error: 'Unable to save this WhatsApp number.' }); }
+});
+
+app.delete('/api/connections/whatsapp', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { email: req.user!.email },
+        data: { whatsappNumber: null, whatsappConnectedAt: null },
+      });
+      await tx.reminderDelivery.updateMany({
+        where: { userEmail: req.user!.email, status: 'pending' },
+        data: { status: 'cancelled', lastError: 'WhatsApp disconnected by the user.' },
+      });
+    });
+    res.json({ whatsappNumber: null });
+  } catch {
+    res.status(500).json({ error: 'Unable to remove this WhatsApp number.' });
+  }
 });
 
 app.post('/api/extraction/start', authenticateJWT, async (req: Request, res: Response) => {

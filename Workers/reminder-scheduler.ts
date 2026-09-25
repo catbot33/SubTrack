@@ -7,11 +7,11 @@ let running = false;
 
 async function reconcileRenewals(now: Date) {
   const subscriptions = await prisma.subscription.findMany({
-    where: { reminderEnabled: true, renewalOrEndDate: { not: null } },
+    where: { renewalOrEndDate: { not: null } },
     include: { user: true },
   });
   for (const subscription of subscriptions) {
-    if (!subscription.user.whatsappNumber || !subscription.renewalOrEndDate) continue;
+    if (!subscription.renewalOrEndDate) continue;
     const todayKey = dateKeyInTimeZone(now, subscription.user.timeZone);
     let renewalKey = subscription.renewalOrEndDate.toISOString().slice(0, 10);
     if (subscription.tag !== 'trial' && renewalKey < todayKey && subscription.billingFrequency) {
@@ -21,6 +21,7 @@ async function reconcileRenewals(now: Date) {
         await prisma.subscription.update({ where: { id: subscription.id }, data: { renewalOrEndDate: new Date(`${rolled}T00:00:00Z`) } });
       }
     }
+    if (!subscription.reminderEnabled || !subscription.user.whatsappNumber) continue;
     const daysRemaining = daysBetweenCalendarDates(todayKey, renewalKey);
     if (daysRemaining < 1 || daysRemaining > subscription.user.reminderLeadDays) continue;
     const deliveryKey = `renewal:${subscription.id}:${renewalKey}:${daysRemaining}`;

@@ -5,9 +5,10 @@ import { CloseCircleIcon } from '@solar-icons/react/linear';
 import type { SavedSubscription } from '../../Workers/subscription-store';
 import styles from './dashboard.module.css';
 
-export default function ManualSubscriptionDialog({ onClose, onSaved }: {
+export default function ManualSubscriptionDialog({ onClose, onSaved, subscription }: {
   onClose: () => void;
   onSaved: (subscription: SavedSubscription) => void;
+  subscription?: SavedSubscription;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const requestId = useRef('');
@@ -21,9 +22,10 @@ export default function ManualSubscriptionDialog({ onClose, onSaved }: {
     element?.showModal();
     return () => { element?.close(); previous?.focus(); };
   }, []);
+  const editing = Boolean(subscription);
   return (
     <dialog ref={dialog} className={styles.manualDialog} aria-labelledby="manual-title" onCancel={(event) => { event.preventDefault(); if (!savingRef.current) onClose(); }}>
-      <div className={styles.dialogHeader}><h2 id="manual-title">Add a subscription</h2><button type="button" className={styles.dialogClose} aria-label="Close form" disabled={saving} onClick={onClose}><CloseCircleIcon aria-hidden="true" /></button></div>
+      <div className={styles.dialogHeader}><h2 id="manual-title">{editing ? 'Edit subscription' : 'Add a subscription'}</h2><button type="button" className={styles.dialogClose} aria-label="Close form" disabled={saving} onClick={onClose}><CloseCircleIcon aria-hidden="true" /></button></div>
       <form onSubmit={async (event) => {
         event.preventDefault();
         if (savingRef.current) return;
@@ -34,7 +36,11 @@ export default function ManualSubscriptionDialog({ onClose, onSaved }: {
         setSaving(true);
         setError('');
         try {
-          const response = await fetch('/api/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...input, requestId: requestId.current }) });
+          const response = await fetch(editing ? `/api/subscriptions/${encodeURIComponent(subscription!.id)}` : '/api/subscriptions', {
+            method: editing ? 'PATCH' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(editing ? input : { ...input, requestId: requestId.current }),
+          });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || 'Unable to save. Please retry.');
           onSaved(data.subscription);
@@ -43,13 +49,13 @@ export default function ManualSubscriptionDialog({ onClose, onSaved }: {
         } finally { savingRef.current = false; setSaving(false); }
       }}>
         <fieldset disabled={saving} className={styles.manualFields}>
-          <label><span>Merchant name</span><input name="serviceName" autoFocus required maxLength={160} placeholder="e.g. Netflix" autoComplete="off" /></label>
-          <label><span>Frequency</span><select name="billingFrequency" required defaultValue=""><option value="" disabled>Select frequency</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annually">Yearly</option></select></label>
-          <label><span>Next renewal date</span><input name="renewalOrEndDate" type="date" required min="1900-01-01" max="9999-12-31" /></label>
-          <label><span>Cost <small>(optional)</small></span><input name="amount" maxLength={80} placeholder="e.g. USD 12.99" autoComplete="off" /></label>
+          <label><span>Merchant name</span><input name="serviceName" autoFocus required maxLength={160} defaultValue={subscription?.serviceName} placeholder="e.g. Netflix" autoComplete="off" /></label>
+          <label><span>Frequency</span><select name="billingFrequency" required defaultValue={subscription?.billingFrequency || ''}><option value="" disabled>Select frequency</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annually">Yearly</option></select></label>
+          <label><span>Next renewal date</span><input name="renewalOrEndDate" type="date" required min="1900-01-01" max="9999-12-31" defaultValue={subscription?.renewalOrEndDate} /></label>
+          <label><span>Cost <small>(optional)</small></span><input name="amount" maxLength={80} defaultValue={subscription?.amount} placeholder="e.g. USD 12.99" autoComplete="off" /></label>
         </fieldset>
         {error ? <p className={styles.scanWarning} role="alert">{error}</p> : null}
-        <div className={styles.reviewActions}><button disabled={saving} type="button" className={styles.secondaryButton} onClick={onClose}>Cancel</button><button disabled={saving} type="submit" className={styles.confirmButton}>{saving ? 'Saving…' : 'Add subscription'}</button></div>
+        <div className={styles.reviewActions}><button disabled={saving} type="button" className={styles.secondaryButton} onClick={onClose}>Cancel</button><button disabled={saving} type="submit" className={styles.confirmButton}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Add subscription'}</button></div>
       </form>
     </dialog>
   );

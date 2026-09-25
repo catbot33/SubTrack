@@ -15,10 +15,10 @@ import {
   MagnifierIcon,
   DownloadMinimalisticIcon,
   MenuDotsIcon,
+  PenNewSquareIcon,
   RestartIcon,
   SettingsMinimalisticIcon,
   ShieldCheckIcon,
-  SidebarMinimalisticIcon,
   TrashBinMinimalisticIcon,
   Widget5Icon,
 } from '@solar-icons/react/linear';
@@ -27,7 +27,9 @@ import styles from './dashboard.module.css';
 import type { SubscriptionEvidence, SubscriptionResult } from '../../Workers/extractor/types';
 import type { SavedSubscription } from '../../Workers/subscription-store';
 import ManualSubscriptionDialog from './manual-subscription-dialog';
+import DeleteSubscriptionDialog from './delete-subscription-dialog';
 import { ConnectionsPanel, RemindersPanel } from './reminder-panels';
+import SettingsPanel from './settings-panel';
 
 type DashboardUser = { name: string; email: string; avatar?: string };
 type Subscription = {
@@ -61,7 +63,7 @@ type JobResponse = {
   skippedEmails?: number;
 };
 type View = 'idle' | 'scanning' | 'review' | 'confirmed' | 'error';
-type Screen = 'Overview' | 'Subscriptions' | 'Needs review' | 'Reminders' | 'Connections';
+type Screen = 'Overview' | 'Subscriptions' | 'Needs review' | 'Reminders' | 'Connections' | 'Settings';
 
 const workspaceNavigation = [
   { label: 'Overview', icon: Widget5Icon, activeIcon: ActiveOverviewIcon },
@@ -71,6 +73,7 @@ const workspaceNavigation = [
 ] as const;
 const accountNavigation = [
   { label: 'Connections', icon: LinkRoundIcon, activeIcon: ActiveLinkIcon },
+  { label: 'Settings', icon: SettingsMinimalisticIcon, activeIcon: SettingsMinimalisticIcon },
 ] as const;
 
 function initialsFor(name: string): string {
@@ -132,6 +135,7 @@ export default function DashboardClient({
   autoStart: boolean;
 }) {
   const [view, setView] = useState<View>(autoStart ? 'scanning' : 'idle');
+  const [profile, setProfile] = useState<DashboardUser>(user);
   const [job, setJob] = useState<JobResponse | null>(null);
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [pendingCandidates, setPendingCandidates] = useState<Subscription[]>([]);
@@ -139,6 +143,9 @@ export default function DashboardClient({
   const [screen, setScreen] = useState<Screen>(autoStart ? 'Needs review' : 'Overview');
   const [saved, setSaved] = useState<SavedSubscription[]>([]);
   const [manualOpen, setManualOpen] = useState(false);
+  const [editingSubscription, setEditingSubscription] = useState<SavedSubscription | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SavedSubscription | null>(null);
+  const [openRowMenu, setOpenRowMenu] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState('');
   const [loadError, setLoadError] = useState('');
   const [ready, setReady] = useState(false);
@@ -153,6 +160,36 @@ export default function DashboardClient({
   const [ratesUnavailable, setRatesUnavailable] = useState(false);
   const confirmLock = useRef(false);
   const latestJob = useRef<JobResponse | null>(null);
+  const handleProfileChange = useCallback((next: DashboardUser) => setProfile(next), []);
+  const handleSettingsNotice = useCallback((message: string, isError = false) => {
+    if (isError) { setSaveNotice(''); setLoadError(message); }
+    else { setLoadError(''); setSaveNotice(message); }
+  }, []);
+
+  useEffect(() => {
+    if (!saveNotice && !loadError) return;
+    const timeout = window.setTimeout(() => {
+      setSaveNotice('');
+      setLoadError('');
+    }, 3200);
+    return () => window.clearTimeout(timeout);
+  }, [saveNotice, loadError]);
+
+  useEffect(() => {
+    if (!openRowMenu) return;
+    const closeMenu = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(`[data-row-menu="${CSS.escape(openRowMenu)}"]`)) return;
+      setOpenRowMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpenRowMenu(null); };
+    document.addEventListener('pointerdown', closeMenu);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openRowMenu]);
 
   const refreshSaved = useCallback(async () => {
     const response = await fetch('/api/subscriptions', { cache: 'no-store' });
@@ -539,6 +576,13 @@ export default function DashboardClient({
   const reviewCount = pendingCandidates.length + (job ? (view === 'scanning' ? Math.max(1, subscriptions.length) : view === 'review' ? subscriptions.length : 0) : 0);
   const openManual = () => {
     setSaveNotice('');
+    setEditingSubscription(null);
+    setManualOpen(true);
+  };
+  const openEdit = (subscription: SavedSubscription) => {
+    setSaveNotice('');
+    setOpenRowMenu(null);
+    setEditingSubscription(subscription);
     setManualOpen(true);
   };
   const filteredSaved = saved.filter((item) => {
@@ -574,7 +618,7 @@ export default function DashboardClient({
   const monthlyTotalText = totalsPending || totalsIncomplete ? '$—' : formatUsd(annualTotal / 12);
   const annualTotalText = totalsPending || totalsIncomplete ? '$—' : formatUsd(annualTotal);
   const today = new Date();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   const upcomingWithin14Days = saved.filter((item) => {
     if (!item.renewalOrEndDate) return false;
     const renewal = Date.parse(item.renewalOrEndDate + 'T00:00:00Z');
@@ -671,7 +715,13 @@ export default function DashboardClient({
             <span role="cell">{({ weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annually: 'Yearly' } as Record<string, string>)[item.billingFrequency || ''] || 'Needs details'}</span>
             <strong role="cell">{item.amount || '—'}</strong><span role="cell">{formatRenewal(item.renewalOrEndDate)}</span>
             <span role="cell"><button disabled={reminderSaving === item.id || !item.renewalOrEndDate} className={item.reminderEnabled ? styles.reminderOn : styles.reminderOff} type="button" onClick={() => void toggleReminder(item)}>{reminderSaving === item.id ? 'Saving…' : item.reminderEnabled ? 'Reminder on' : 'Set reminder'}</button></span>
-            <button className={styles.rowMenu} type="button" aria-label={`More options for ${item.serviceName}`}><MenuDotsIcon aria-hidden="true" /></button>
+            <div className={styles.rowMenuWrap} data-row-menu={item.id}>
+              <button className={styles.rowMenu} type="button" aria-haspopup="menu" aria-expanded={openRowMenu === item.id} aria-label={`More options for ${item.serviceName}`} onClick={() => setOpenRowMenu((current) => current === item.id ? null : item.id)}><MenuDotsIcon aria-hidden="true" /></button>
+              {openRowMenu === item.id ? <div className={styles.rowMenuPopover} role="menu">
+                <button type="button" role="menuitem" onClick={() => openEdit(item)}><PenNewSquareIcon aria-hidden="true" /><span>Edit</span></button>
+                <button className={styles.deleteMenuItem} type="button" role="menuitem" onClick={() => { setOpenRowMenu(null); setDeleteTarget(item); }}><TrashBinMinimalisticIcon aria-hidden="true" /><span>Delete</span></button>
+              </div> : null}
+            </div>
           </div>)}
         </div> : <div className={styles.noResults}><CardIcon aria-hidden="true" /><h3>{saved.length ? 'No matching subscriptions' : 'No saved subscriptions yet'}</h3>{!saved.length ? <button className={styles.connectButton} type="button" onClick={openManual}>Add manually</button> : null}</div>}
       </div>
@@ -680,20 +730,27 @@ export default function DashboardClient({
   );
 
   const mainContent = !ready ? <p role="status">Loading your workspace…</p> : screen === 'Needs review'
-    ? view === 'idle' ? <section className={styles.emptyState}><h2>Nothing to review yet</h2><p className={styles.emptyDescription}>New findings from connected inboxes will appear here.</p><button className={styles.connectButton} type="button" onClick={() => setScreen('Connections')}>Open connections</button></section> : content
+    ? view === 'idle' ? <section className={styles.emptyState}><h2>Nothing to review yet</h2><p className={styles.emptyDescription}>New findings from connected inboxes will appear here.</p></section> : content
     : screen === 'Overview' ? saved.length ? overviewContent : content
       : screen === 'Subscriptions' ? savedContent
         : screen === 'Reminders' ? <RemindersPanel subscriptions={saved} savingId={reminderSaving} onToggle={toggleReminder} onOpenConnections={() => setScreen('Connections')} />
-          : <ConnectionsPanel />;
+          : screen === 'Connections' ? <ConnectionsPanel />
+            : <SettingsPanel user={profile} onProfileChange={handleProfileChange} onSubscriptionsCleared={() => setSaved([])} onNotify={handleSettingsNotice} />;
 
   return (
     <div className={styles.dashboardShell}>
+      {loadError || saveNotice ? <div className={`${styles.toastNotice} ${loadError ? styles.toastError : styles.toastSuccess}`} role={loadError ? 'alert' : 'status'} aria-live={loadError ? 'assertive' : 'polite'}>{loadError || saveNotice}</div> : null}
       <aside className={styles.sidebar} aria-label="Primary navigation">
         <div className={styles.sidebarTop}>
           <div className={styles.brandRow}>
-            <span className={styles.brandMark} aria-hidden="true">S<span /></span>
-            <span className={styles.brandCopy}><strong>SubTrack</strong></span>
-            <SidebarMinimalisticIcon className={styles.collapseIcon} aria-hidden="true" />
+            <Image
+              className={styles.brandLogo}
+              src="/subtrack-logo-dark.png"
+              alt="SubTrack"
+              width={1616}
+              height={367}
+              priority
+            />
           </div>
           <nav className={styles.navigation}>
             <p>Workspace</p>
@@ -708,12 +765,11 @@ export default function DashboardClient({
               const Icon = active ? item.activeIcon : item.icon;
               return <button type="button" className={active ? styles.activeNavItem : styles.navItem} aria-current={active ? 'page' : undefined} onClick={() => selectScreen(item.label)} key={item.label}><Icon aria-hidden="true" /><span>{item.label}</span></button>;
             })}
-            <a className={styles.navItem} href="#settings"><SettingsMinimalisticIcon aria-hidden="true" /><span>Settings</span></a>
           </nav>
         </div>
         <div className={styles.userCard}>
-          <div className={styles.avatar}>{user.avatar ? <Image src={user.avatar} alt="" width={38} height={38} unoptimized /> : <span>{initialsFor(user.name)}</span>}</div>
-          <span className={styles.userDetails}><strong>{user.name}</strong><small>{user.email}</small></span>
+          <div className={styles.avatar}>{profile.avatar ? <img src={profile.avatar} alt="" /> : <span>{initialsFor(profile.name)}</span>}</div>
+          <span className={styles.userDetails}><strong>{profile.name}</strong><small>{profile.email}</small></span>
           <a className={styles.logoutButton} href="/auth/logout" aria-label="Sign out"><Logout2Icon aria-hidden="true" /></a>
         </div>
       </aside>
@@ -727,16 +783,24 @@ export default function DashboardClient({
           </div>
         </header>
         <main className={styles.workspace}>
-          {loadError ? <p className={styles.scanWarning} role="alert">{loadError}</p> : null}
-          {saveNotice ? <p className={styles.savedNotice} role="status">{saveNotice}</p> : null}
           {mainContent}
         </main>
       </section>
-      {manualOpen ? <ManualSubscriptionDialog onClose={() => setManualOpen(false)} onSaved={(subscription) => {
-        setSaved((current) => current.some((item) => item.id === subscription.id) ? current : [...current, subscription]);
+      {manualOpen ? <ManualSubscriptionDialog subscription={editingSubscription || undefined} onClose={() => { setManualOpen(false); setEditingSubscription(null); }} onSaved={(subscription) => {
+        const wasEditing = Boolean(editingSubscription);
+        setSaved((current) => current.some((item) => item.id === subscription.id) ? current.map((item) => item.id === subscription.id ? subscription : item) : [...current, subscription]);
         setManualOpen(false);
+        setEditingSubscription(null);
         setScreen('Subscriptions');
-        setSaveNotice(subscription.serviceName + ' added.');
+        setLoadError('');
+        setSaveNotice(subscription.serviceName + (wasEditing ? ' updated.' : ' added.'));
+      }} /> : null}
+      {deleteTarget ? <DeleteSubscriptionDialog subscription={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={(id) => {
+        const name = deleteTarget.serviceName;
+        setSaved((current) => current.filter((item) => item.id !== id));
+        setDeleteTarget(null);
+        setLoadError('');
+        setSaveNotice(name + ' deleted.');
       }} /> : null}
     </div>
   );
