@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BellIcon, CloseCircleIcon, EyeIcon, Logout2Icon, PenNewSquareIcon, TrashBinMinimalisticIcon, UserCircleIcon } from '@solar-icons/react/linear';
+import { ArrowRightUpIcon, BellIcon, CloseCircleIcon, DocumentTextIcon, EyeIcon, Logout2Icon, PenNewSquareIcon, ScaleIcon, ShieldCheckIcon, TrashBinMinimalisticIcon, UserCircleIcon } from '@solar-icons/react/linear';
 import styles from './dashboard.module.css';
 
 type Profile = { name: string; email: string; avatar?: string };
@@ -121,6 +121,26 @@ export default function SettingsPanel({ user, onProfileChange, onSubscriptionsCl
       <section className={styles.settingsCard} aria-labelledby="monitoring-settings-title">
         <div className={styles.settingsCardHeading}><span><EyeIcon aria-hidden="true" /></span><div><h3 id="monitoring-settings-title">Live monitoring</h3><p>Pause or continue checking connected Gmail inboxes.</p></div></div>
         <div className={styles.settingRow}><div><strong>{data?.monitoringPaused ? 'Monitoring is on hold' : 'Monitoring is active'}</strong><small>{data ? `${data.gmailConnections} Gmail ${data.gmailConnections === 1 ? 'connection' : 'connections'}` : 'Loading…'}</small></div><button className={styles.secondaryButton} type="button" disabled={!data || Boolean(busy)} onClick={() => void update('monitoring', '/api/settings/monitoring', { paused: !data?.monitoringPaused }, data?.monitoringPaused ? 'Live monitoring continued.' : 'Live monitoring paused.')}>{busy === 'monitoring' ? 'Saving…' : data?.monitoringPaused ? 'Continue' : 'Pause'}</button></div>
+      </section>
+
+      <section className={styles.settingsCard} aria-labelledby="legal-settings-title">
+        <div className={styles.settingsCardHeading}><span><ShieldCheckIcon aria-hidden="true" /></span><div><h3 id="legal-settings-title">Legal &amp; Privacy</h3><p>Review our commitments to your data privacy and service terms.</p></div></div>
+        <div className={styles.legalLinksList}>
+          <a className={styles.legalLinkRow} href="/privacy" target="_blank" rel="noopener noreferrer">
+            <div className={styles.legalLinkInfo}>
+              <DocumentTextIcon aria-hidden="true" className={styles.legalLinkIcon} />
+              <div><strong>Privacy Policy</strong><small>How we collect, protect, and use your subscription and account data.</small></div>
+            </div>
+            <span className={styles.legalLinkAction}><span>View policy</span><ArrowRightUpIcon aria-hidden="true" /></span>
+          </a>
+          <a className={styles.legalLinkRow} href="/terms" target="_blank" rel="noopener noreferrer">
+            <div className={styles.legalLinkInfo}>
+              <ScaleIcon aria-hidden="true" className={styles.legalLinkIcon} />
+              <div><strong>Terms of Service</strong><small>The rules, responsibilities, and terms governing your use of SubTrack.</small></div>
+            </div>
+            <span className={styles.legalLinkAction}><span>View terms</span><ArrowRightUpIcon aria-hidden="true" /></span>
+          </a>
+        </div>
       </section>
 
       <section className={`${styles.settingsCard} ${styles.dangerZone}`} aria-labelledby="data-settings-title">

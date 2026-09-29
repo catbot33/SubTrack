@@ -71,9 +71,9 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
 
       <footer className="legal">
         <span>By continuing, you agree to our</span>{' '}
-        <a href="#terms">Terms of Service</a>
+        <a href="/terms">Terms of Service</a>
         <span> and </span>
-        <a href="#privacy">Privacy Policy</a>.
+        <a href="/privacy">Privacy Policy</a>.
       </footer>
     </main>
   );
